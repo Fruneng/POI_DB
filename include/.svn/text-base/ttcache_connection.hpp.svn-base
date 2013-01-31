@@ -1,0 +1,662 @@
+#pragma once
+
+#define TTEXCEPT
+
+#include <ttclasses/TTInclude.h>
+#include <stdio.h>
+#include <iostream>
+#include <string>
+#include <map>
+#include <boost/unordered_map.hpp>
+
+//#import "D:\MyProj\timesten\tt_cache_demo\ttclasses1122.dll" no_namespace
+
+#define TTCP_CHN 936
+
+#define TT_DATE_CHAR			8
+#define TT_TIME_CHAR			6
+#define TT_DATETIME_CHAR		14
+#define TT_PREFETCH_RECORD		128
+#define TT_INVALIDDATA			0xffffffff
+
+#define TT_MAX_HANDLE_NUM		4
+
+//#define TT_PROTECTED			protected:
+
+#define REGISTER				true
+#define UNREGISTER				false
+
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable:4101)
+#endif
+
+typedef struct st_datetime
+{
+	unsigned short year;
+	unsigned short month;
+	unsigned short day;
+	unsigned short hour;
+	unsigned short minute;
+	unsigned short second;
+
+	unsigned long fraction;
+	//unit by 100ns
+
+	st_datetime()
+		:year(0),month(0),day(0),hour(0),minute(0),second(0),fraction(0)
+	{
+
+	}
+} st_datetime;
+
+typedef TTConnection	ttconnection;
+typedef TTStatus		ttstatus;
+typedef TTCmd			ttcmd;
+
+class ttcache_connection;
+
+class transaction
+{
+public:
+	friend class ttcache_connection;
+	typedef enum CommandType { PrepareExecute = 0, ImmediatelyExecute = 1 };
+	typedef struct columninfo
+	{
+		int no;
+		int columntype;
+	} columninfo;
+//	typedef std::map<std::string, columninfo> column_name_index;
+	typedef boost::unordered_map<std::string, columninfo> column_name_index;
+
+public:
+	explicit transaction(ttconnection & ttconn_)
+		:ttconn(ttconn_),cmd(),cmdtype(ImmediatelyExecute),bprepared(false),bEof(true),resultset_empty(true)
+	{
+// 		try {
+// 			ttconn.Commit();
+// 			ttconn.SetAutoCommitOff();
+// 		} catch (ttstatus & st) {
+// #ifdef _DEBUG 
+// 			printf(st.err_msg); 
+// #endif
+// 		}
+	}
+	~transaction()
+	{
+		commit();
+	}
+protected:
+	void prepare(std::string const & sql)
+	{
+		drop();
+		try {
+			cmd.Prepare(&ttconn,sql.c_str());
+			commit();
+			//	cmdtype = PrepareExecute;
+			bprepared = true;
+ 		} catch(ttstatus & st) {
+ #ifdef _DEBUG 
+ 			printf(st.err_msg); 
+ #endif
+ 		}
+	}
+	template<typename ParamType>
+	bool setParam(int no, ParamType const & value)
+	{
+		bool bsuccess = false;
+		if (isPrepared()) {
+			try {
+				cmd.setParam(no,value);
+				bsuccess = true;
+ 			} catch (ttstatus & st) {
+ #ifdef _DEBUG 
+ 				printf(st.err_msg); 
+ #endif
+ 			}
+		}
+// 		else
+// 			assert(false);
+		return bsuccess;
+	}
+	template<typename ParamType>
+	bool getParam(int no, ParamType * pvalue)
+	{
+		bool bsuccess = false;
+		if (isPrepared() && !pvalue) {
+			try {
+				bsuccess = cmd.getParam(no,pvalue);
+			} catch (ttstatus & st) {
+#ifdef _DEBUG
+				printf(st.err_msg);
+#endif
+			}
+		}
+		return bsuccess;
+	}
+	void setParamLength(int no, int byteLen)
+	{
+		cmd.setParamLength(no,byteLen);
+	}
+	void setParamNull(int no)
+	{
+		cmd.setParamNull(no);
+	}
+
+	//************************************
+	// Method:    execute
+	// FullName:  transaction::execute
+	// Access:    public 
+	// Returns:   bool
+	// Qualifier: before call this method,you should call <code>void prepare(std::string const & sql)</code> first,
+	//			  maybe you need to call <code>template<class ParamType> bool setParam(int no, ParamType & value, int byteLen = -1)</code> too 
+	//			  only if you have some variable parameters to bind in your sql statements
+	// Parameter: unsigned long * paffectedrows
+	//************************************
+	bool execute(int * paffectedrows = NULL)
+	{
+		bool bsuccess = false;
+		//	cmdtype = PrepareExecute;
+		close();
+		if (isPrepared())
+		{
+			try {
+				cmd.Execute();
+				if (paffectedrows != NULL)
+					*paffectedrows = cmd.getRowCount();
+				bsuccess = true;
+ 			} catch (ttstatus & st) {
+ #ifdef _DEBUG 
+ 				printf(st.err_msg); 
+ #endif
+ 			}
+		}
+		return bsuccess;
+	}
+
+	//************************************
+	// Method:    execute
+	// FullName:  transaction::execute
+	// Access:    public 
+	// Returns:   bool
+	// Qualifier: this method is for all DML statements(insert,delete,update)
+	//			  and some DDL statements(drop or create table,trigger), but not for query like "select",
+	//			  no records set will be returned
+	// Parameter: std::string const & sql
+	// Parameter: unsigned long * paffectedrows
+	//************************************
+	bool execute(std::string const & sql,int * paffectedrows = NULL)
+	{
+		bool bsuccess = false;
+		//	cmdtype = ImmediatelyExecute;
+		{
+			close();
+			drop();
+		}
+		try {
+			int rows = cmd.ExecuteImmediate(&ttconn, sql.c_str());
+			if (paffectedrows != NULL)
+				*paffectedrows = rows;
+			bsuccess = true;
+		} catch (ttstatus & st) {
+#ifdef _DEBUG 
+			printf(st.err_msg); 
+#endif
+		}
+		return bsuccess;
+	}
+protected:
+	void MoveFirst()
+	{
+		MoveNext();
+	}
+	//************************************
+	// Method:    moveNext
+	// FullName:  transaction::moveNext
+	// Access:    public 
+	// Returns:   void
+	// Qualifier: before call this method, you must call <code> void moveFirst() </code> first
+	//************************************
+	void MoveNext()
+	{
+		try {
+			bEof = cmd.FetchNext() == 1;
+			if (!bEof && map_column.empty())
+			{
+				resultset_empty = false;
+				getColumnInfo();
+			}
+ 		} catch(ttstatus & st) {
+ 			close();
+ #ifdef _DEBUG 
+ 			printf(st.err_msg); 
+ #endif
+ 		}
+	}
+	bool Eof()
+	{
+		return bEof;
+	}
+
+	template<class fieldtype>
+	fieldtype FieldValue(std::string const & fieldname, fieldtype *)
+	{
+		fieldtype value;
+		FieldValue(fieldname,value);
+		return value;
+	}
+
+	//************************************
+	// Method:    fieldValue
+	// FullName:  transaction<fieldtype>::fieldValue
+	// Access:    public 
+	// Returns:   bool
+	// Qualifier: this method is for fields with types like integer,float and double
+	// Parameter: std::string const & fieldname, fieldname must be uppercase
+	// Parameter: fieldtype & value
+	//************************************
+	template<class fieldtype>
+	bool FieldValue(std::string const & fieldname,fieldtype & value)
+	{
+		bool bsuccess = false;
+		if (!resultset_empty && !bEof)
+		{
+			column_name_index::iterator it = map_column.find(fieldname);
+			if (it != map_column.end())
+				try {
+					switch (it->second.columntype)
+					{
+					case SQL_INTEGER:
+					case SQL_SMALLINT:
+					case SQL_TINYINT:
+					case SQL_BIGINT:
+					case SQL_DECIMAL:
+					case SQL_FLOAT:
+					case SQL_DOUBLE:
+					case SQL_REAL:
+					case SQL_NUMERIC:
+						if (cmd.getColumnNullable(it->second.no,&value))
+							value = 0;
+						bsuccess = true;
+						break;
+					default:
+						;
+					}
+			} catch(ttstatus & st) {
+#ifdef _DEBUG 
+				printf(st.err_msg); 
+#endif
+			}
+		}
+		return bsuccess;
+	}
+
+	//************************************
+	// Method:    fieldValue
+	// FullName:  transaction<>::fieldValue
+	// Access:    public 
+	// Returns:   bool
+	// Qualifier: this method is for fields with types like date,time,datetime(timestamp)
+	// Parameter: std::string const & fieldname, fieldname must be uppercase
+	// Parameter: st_datetime & value
+	//************************************
+	template<>
+	bool FieldValue(std::string const & fieldname,st_datetime & value)
+	{
+		bool bsuccess = false;
+		if (!resultset_empty && !bEof)
+		{
+			column_name_index::iterator it = map_column.find(fieldname);
+			if (it != map_column.end())
+				try {
+					switch (it->second.columntype)
+					{
+					case SQL_DATE:
+						DATE_STRUCT date;
+						if (cmd.getColumnNullable(it->second.no,&date))
+							memset((unsigned char *)&date,0,sizeof(date));
+						value.year = date.year;
+						value.month = date.month;
+						value.day = date.day;
+						bsuccess = true;
+						break;
+					case SQL_TIME:
+						TIME_STRUCT time;
+						if (cmd.getColumnNullable(it->second.no,&time))
+							memset((unsigned char *)&time,0,sizeof(time));
+						value.hour = time.hour;
+						value.minute = time.minute;
+						value.second = time.second;
+						bsuccess = true;
+						break;
+					case SQL_TIMESTAMP:
+						TIMESTAMP_STRUCT datetime;
+						if (cmd.getColumnNullable(it->second.no,&datetime))
+							memset((unsigned char *)&datetime,0,sizeof(datetime));
+						value.year = datetime.year;
+						value.month = datetime.month;
+						value.day = datetime.day;
+						value.hour = datetime.hour;
+						value.minute = datetime.minute;
+						value.second = datetime.second;
+						value.fraction = datetime.fraction;
+						bsuccess = true;
+						break;
+					default:
+						;
+					}
+			} catch (ttstatus & st) {
+#ifdef _DEBUG 
+				printf(st.err_msg); 
+#endif
+			}
+		}
+		return bsuccess;
+	}
+
+	//************************************
+	// Method:    fieldValue
+	// FullName:  transaction<>::fieldValue
+	// Access:    public 
+	// Returns:   bool
+	// Qualifier: this method is for fields with types like char,varchar,wchar,wvarchar,
+	//			  date--"yyyymmdd",time--"hhmmss",datetime(timestamp)--"yyyymmddhhmmss"
+	// Parameter: std::string const & fieldname, fieldname must be uppercase
+	// Parameter: std::string & value
+	//************************************
+	template<>
+	bool FieldValue(std::string const & fieldname,std::string & value)
+	{
+		bool bsuccess = false;
+		if (!resultset_empty && !bEof)
+		{
+			column_name_index::iterator it = map_column.find(fieldname);
+			if (it != map_column.end())
+				try {
+					int byteLen = 0;
+					int len = 0;
+					std::string scopebuf;
+					switch (it->second.columntype)
+					{
+					case SQL_DATE:
+						DATE_STRUCT date;
+						if (cmd.getColumnNullable(it->second.no,&date))
+							memset((unsigned char *)&date,0,sizeof(date));
+						value.assign(TT_DATE_CHAR+1,0);
+						sprintf_s(&value[0],TT_DATE_CHAR+1,"%04d%02d%02d",date.year,date.month,date.day);
+						bsuccess = true;
+						break;
+					case SQL_TIME:
+						TIME_STRUCT time;
+						if (cmd.getColumnNullable(it->second.no,&time))
+							memset((unsigned char *)&time,0,sizeof(time));
+						value.assign(TT_TIME_CHAR+1,0);
+						sprintf_s(&value[0],TT_TIME_CHAR+1,"%02d%02d%02d",time.hour,time.minute,time.second);
+						bsuccess = true;
+						break;
+					case SQL_TIMESTAMP:
+						TIMESTAMP_STRUCT datetime;
+						if (cmd.getColumnNullable(it->second.no,&datetime))
+							memset((unsigned char *)&datetime,0,sizeof(datetime));
+						value.assign(TT_DATETIME_CHAR+1,0);
+						sprintf_s(&value[0],TT_DATETIME_CHAR+1,"%04d%02d%02d%02d%02d%02d",
+							datetime.year,datetime.month,datetime.day,
+							datetime.hour,datetime.minute,datetime.second);
+						bsuccess = true;
+						break;
+					case SQL_CHAR:
+					case SQL_VARCHAR:
+						byteLen = cmd.getColumnLength(it->second.no) + 1;  //additional 1 byte is for '\0'
+						if (byteLen > 1)
+						{
+							value.assign(byteLen,0);
+							cmd.getColumn(it->second.no,(char *)&value[0]);
+						}
+						bsuccess = true;
+						break;
+					case SQL_WCHAR:
+					case SQL_WVARCHAR:
+						byteLen = cmd.getColumnLength(it->second.no) + 2;  //additional 2 byte is for '\0\0'
+						if (byteLen > 2)
+						{
+							scopebuf.assign(byteLen,0);
+							cmd.getColumn(it->second.no, (char *)&scopebuf[0]);
+							len = WideCharToMultiByte(TTCP_CHN,0,reinterpret_cast<wchar_t *>(&scopebuf[0]),-1,NULL,0,NULL,NULL);
+							value.assign(len + 1,0);
+							WideCharToMultiByte(TTCP_CHN,0,reinterpret_cast<wchar_t *>(&scopebuf[0]),-1,&value[0],len+1,NULL,NULL) != 0;
+						}	
+						bsuccess = true;
+						break;
+					default:
+						;
+					}
+			} catch (ttstatus & st) {
+#ifdef _DEBUG 
+				printf(st.err_msg); 
+#endif
+			}
+		}
+		return bsuccess;
+	}
+
+protected:
+	void commit()
+	{
+		try {
+			ttconn.Commit();
+ 		} catch(ttstatus & st) {
+ #ifdef _DEBUG 
+ 			printf(st.err_msg); 
+ #endif
+ 		}
+	}
+	void rollback()
+	{
+		try {
+			ttconn.Rollback();
+		} catch(ttstatus & st) {
+#ifdef _DEBUG 
+			printf(st.err_msg); 
+#endif
+		}
+	}
+
+	void getColumnInfo()
+	{
+		map_column.clear();
+		int columns = cmd.getNColumns();
+		columninfo info;
+		for (int i = 0; i != columns; ++i)
+		{
+			info.no = i+1;
+			info.columntype = cmd.getColumnType(info.no);
+#ifdef _DEBUG
+			//printf("%s\t",cmd.getColumnName(info.no));
+#endif
+			map_column.insert(column_name_index::value_type(cmd.getColumnName(info.no),info));
+		}
+#ifdef _DEBUG
+		//printf("\n");
+#endif
+	}
+
+	bool isPrepared()
+	{
+		return bprepared;
+	}
+	void drop()
+	{
+		try {
+			if (isPrepared())
+			{
+				bprepared = false;
+				cmd.Drop();
+			}
+ 		} catch(ttstatus & st) {
+ #ifdef _DEBUG 
+ 			printf(st.err_msg); 
+ #endif
+ 		}
+	}
+public:
+	void close()
+	{
+		if (!resultset_empty)
+		{
+			bEof = true;
+			resultset_empty = true;
+			map_column.clear();
+			try {
+				cmd.Close();
+ 			} catch(ttstatus & st) {
+ #ifdef _DEBUG
+ 				printf(st.err_msg);
+ #endif
+ 			}
+		}
+	}
+
+private:
+	ttconnection & ttconn;
+	ttcmd cmd;
+
+	bool bprepared;
+	bool resultset_empty;
+	bool bEof;
+
+	column_name_index map_column;
+
+	CommandType cmdtype;
+};
+//not thread safe
+
+typedef transaction * ptransaction;
+
+class ttcache_connection
+{
+public:
+	typedef bool rettype_excute;
+
+public:
+	explicit ttcache_connection(std::string const & dsn,std::string const & username,
+		std::string const & password,std::string const & oraclepwd)
+		:connectStr(),ttconn(),trans(ttconn)
+	{
+		connectStr.assign(dsn.length()+username.length()+password.length()+oraclepwd.length()+48, 0);
+		sprintf_s(&connectStr[0],connectStr.size()-1, "uid=%s;pwd=%s;oraclepwd=%s;dsn=%s",
+			username.c_str(),password.c_str(),oraclepwd.c_str(),dsn.c_str());
+		connect();
+	}
+	explicit ttcache_connection(std::string const & connStr)
+		:connectStr(connStr),ttconn(),trans(ttconn)
+	{
+		connect();
+	}
+	void prepare(std::string const & sql)
+	{
+		if (!sql.empty())
+			trans.prepare(sql);
+	}
+	template<typename ParamType>
+	bool setParam(int no, ParamType const & value)
+	{
+		return trans.setParam(no, value);
+	}
+	rettype_excute ExecuteCmd(int * paffectedrows = NULL)
+	{
+		return trans.execute(paffectedrows);
+	}
+	rettype_excute ExecuteCmd(std::string const & sql, int * paffectedrows = NULL)
+	{
+		return trans.execute(sql,paffectedrows);
+	}
+	template<typename fieldtype>
+	fieldtype FieldValue(std::string const & fieldname, fieldtype *)
+	{
+		fieldtype value;
+		FieldValue(fieldname, value);
+		return value;
+	}
+	template<typename fieldtype>
+	bool FieldValue(std::string const & fieldname, fieldtype & value)
+	{
+		return trans.FieldValue(fieldname, value);
+	}
+	bool Eof()
+	{
+		return trans.Eof();
+	}
+	void MoveFirst()
+	{
+		trans.MoveFirst();
+	}
+	void MoveNext()
+	{
+		trans.MoveNext();
+	}
+protected:
+	int connect()
+	{
+		bool bsuccess = false;
+		try {
+			if (!isConnected())
+				ttconn.Connect(connectStr.c_str(), TTConnection::DRIVER_COMPLETE);
+			ttconn.SetAutoCommitOff();
+			ttconn.SetPrefetchCloseOn();
+			ttconn.SetPrefetchCount(TT_PREFETCH_RECORD);
+			bsuccess = true;
+		} catch(ttstatus & st) { 
+#ifdef _DEBUG 
+			printf(st.err_msg); 
+#endif
+		}
+		return bsuccess;
+	}
+
+	bool isConnected()
+	{
+		return ttconn.isConnected();
+	}
+
+	void setAutoCommitOn()
+	{
+		ttconn.SetAutoCommitOn();
+	}
+
+	void setAutoCommitOff()
+	{
+		ttconn.SetAutoCommitOff();
+	}
+
+	void commit()
+	{
+		ttconn.Commit();
+	}
+
+	void rollback()
+	{
+		ttconn.Rollback();
+	}
+
+public:
+	void clear()
+	{
+		try { trans.drop(); } catch(ttstatus & st) {}
+		try { trans.close(); } catch(ttstatus & st) {}
+		try { commit(); } catch(ttstatus & st) {}
+	}
+private:
+// 	std::string constr;
+// 	std::string username;
+// 	std::string password;
+// 	std::string oraclepwd;
+
+	ttconnection ttconn;
+	std::string connectStr;
+	transaction trans;
+};
+//not thread safe
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif

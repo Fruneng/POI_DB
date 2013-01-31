@@ -1,0 +1,53 @@
+K 25
+svn:wc:ra_dav:version-url
+V 35
+/svn/!svn/ver/40/trunk/include/base
+END
+critical.hpp
+K 25
+svn:wc:ra_dav:version-url
+V 48
+/svn/!svn/ver/10/trunk/include/base/critical.hpp
+END
+BlockingQueue.hpp
+K 25
+svn:wc:ra_dav:version-url
+V 52
+/svn/!svn/ver/5/trunk/include/base/BlockingQueue.hpp
+END
+CCalloc.h
+K 25
+svn:wc:ra_dav:version-url
+V 44
+/svn/!svn/ver/5/trunk/include/base/CCalloc.h
+END
+gridfunc.hpp
+K 25
+svn:wc:ra_dav:version-url
+V 47
+/svn/!svn/ver/5/trunk/include/base/gridfunc.hpp
+END
+TimePeriod.hpp
+K 25
+svn:wc:ra_dav:version-url
+V 50
+/svn/!svn/ver/10/trunk/include/base/TimePeriod.hpp
+END
+base64.hpp
+K 25
+svn:wc:ra_dav:version-url
+V 46
+/svn/!svn/ver/30/trunk/include/base/base64.hpp
+END
+zmq_tool.hpp
+K 25
+svn:wc:ra_dav:version-url
+V 48
+/svn/!svn/ver/40/trunk/include/base/zmq_tool.hpp
+END
+quitctrl.hpp
+K 25
+svn:wc:ra_dav:version-url
+V 47
+/svn/!svn/ver/5/trunk/include/base/quitctrl.hpp
+END
